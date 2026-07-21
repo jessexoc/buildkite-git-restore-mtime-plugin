@@ -1,0 +1,139 @@
+#!/bin/bash
+
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=lib/shared.bash
+. "$DIR/../lib/shared.bash"
+
+# shellcheck source=lib/plugin.bash
+. "$DIR/../lib/plugin.bash"
+
+# Global variable used by plugin_read_list_into_result
+result=()
+
+# Default Docker image used by the `docker` tool-location.
+DEFAULT_DOCKER_IMAGE="ghcr.io/jessexoc/git-restore-mtime"
+
+# Populates the global GRM_CMD array with the command used to invoke
+# git-restore-mtime, based on the `tool-location` option:
+#   docker         -> run the default image, mounting the checkout at /workdir
+#   docker:<image> -> run a custom image the same way
+#   path           -> use git-restore-mtime found on PATH
+#   path:<file>    -> use the executable at the given path
+# Relies on the global CHECKOUT_PATH being set to the work tree root.
+GRM_CMD=()
+resolve_git_restore_mtime() {
+  local location
+  location=$(plugin_read_config TOOL_LOCATION "docker")
+
+  case "${location}" in
+    docker | docker:*)
+      local image="${DEFAULT_DOCKER_IMAGE}"
+      if [[ "${location}" == docker:* ]]; then
+        image="${location#docker:}"
+      fi
+      if ! command_exists docker; then
+        log_error "tool-location is '${location}' but docker is not available on the agent."
+        exit 1
+      fi
+      # Mount the checkout at /workdir and run there so pathspecs resolve
+      # relative to the repository root regardless of the image's WORKDIR.
+      GRM_CMD=(docker run --rm -v "${CHECKOUT_PATH}:/workdir" -w /workdir "${image}")
+      log_info "Using git-restore-mtime from Docker image: ${image}"
+      ;;
+    path)
+      if ! command_exists git-restore-mtime; then
+        log_error "tool-location is 'path' but git-restore-mtime was not found on PATH."
+        exit 1
+      fi
+      GRM_CMD=(git-restore-mtime)
+      log_info "Using git-restore-mtime found on PATH"
+      ;;
+    path:*)
+      local tool="${location#path:}"
+      if [[ ! -x "${tool}" ]]; then
+        log_error "tool-location points to '${tool}', which is not an executable file."
+        exit 1
+      fi
+      GRM_CMD=("${tool}")
+      log_info "Using git-restore-mtime at: ${tool}"
+      ;;
+    *)
+      log_error "Invalid tool-location: '${location}'."
+      log_error "Expected one of: docker, docker:<image>, path, path:<file>."
+      exit 1
+      ;;
+  esac
+}
+
+# Appends a git-restore-mtime flag to the global 'args' array when the given
+# boolean config option is enabled.
+add_flag_if_enabled() {
+  local config_key="$1"
+  local flag="$2"
+  local value
+  value=$(plugin_read_config "${config_key}" "false")
+  if [[ "${value}" =~ ^(true|on|1)$ ]]; then
+    args+=("${flag}")
+  fi
+}
+
+main() {
+  # Set up error reporting and debug mode
+  setup_error_trap
+  enable_debug_if_requested
+
+  echo "--- :clock3: Restoring file modification times with git-restore-mtime"
+
+  # Work tree root. Buildkite sets BUILDKITE_BUILD_CHECKOUT_PATH; fall back to
+  # the current directory otherwise.
+  CHECKOUT_PATH="${BUILDKITE_BUILD_CHECKOUT_PATH:-$PWD}"
+  cd "${CHECKOUT_PATH}"
+
+  # `.git` exists (as a dir for normal clones, a file for worktrees/submodules)
+  # in any checkout worth restoring; this check needs no git binary on the host,
+  # which matters for the docker tool-location.
+  if [[ ! -e .git ]] && ! git rev-parse --git-dir >/dev/null 2>&1; then
+    log_warning "Not inside a git repository; skipping git-restore-mtime."
+    return 0
+  fi
+
+  resolve_git_restore_mtime
+
+  local args=()
+  add_flag_if_enabled COMMIT_TIME "--commit-time"
+  add_flag_if_enabled FIRST_PARENT "--first-parent"
+  add_flag_if_enabled SKIP_MISSING "--skip-missing"
+  add_flag_if_enabled MERGE "--merge"
+  add_flag_if_enabled NO_DIRECTORIES "--no-directories"
+  add_flag_if_enabled FORCE "--force"
+  add_flag_if_enabled DRY_RUN "--test"
+  add_flag_if_enabled VERBOSE "--verbose"
+  add_flag_if_enabled QUIET "--quiet"
+
+  local skip_older_than
+  skip_older_than=$(plugin_read_config SKIP_OLDER_THAN "")
+  if [[ -n "${skip_older_than}" ]]; then
+    args+=("--skip-older-than" "${skip_older_than}")
+  fi
+
+  # Limit to specific pathspecs when provided.
+  if plugin_read_list_into_result PATHS; then
+    args+=("${result[@]}")
+    log_info "Restoring mtime for paths: $(array_join ", " "${result[@]}")"
+  else
+    log_info "Restoring mtime for the entire work tree"
+  fi
+
+  log_info "Running: ${GRM_CMD[*]} ${args[*]:-}"
+  if "${GRM_CMD[@]}" ${args[@]+"${args[@]}"}; then
+    log_success "File modification times restored"
+  else
+    log_error "git-restore-mtime failed"
+    exit 1
+  fi
+}
+
+main "$@"

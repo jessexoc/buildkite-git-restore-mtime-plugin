@@ -1,0 +1,51 @@
+steps:
+  - label: ":shell: Tests"
+    plugins:
+      - plugin-tester#v1.3.0:
+          folders:
+            - tests
+
+  - label: ":sparkles: Lint"
+    plugins:
+      - plugin-linter#v3.3.0:
+          id: git-restore-mtime
+
+  - label: ":shell: Shellcheck"
+    plugins:
+      - shellcheck#v1.4.0:
+          files:
+            - hooks/**
+            - lib/*.bash
+
+  # Only publish once the checks above pass.
+  - wait: ~
+
+  # Publish the Docker image to the Buildkite package registry, only on the
+  # default branch or a version tag. The version tag is used on tag builds,
+  # otherwise `latest`.
+  - label: ":docker: Publish image to Buildkite Packages"
+    if: build.branch == pipeline.default_branch || build.tag != null
+    # Build the image locally first; docker-image-push publishes an image that
+    # already exists in the local Docker daemon (it does not build). `--load`
+    # copies the result into the local image store so the plugin can tag/push it
+    # (needed when the active buildx builder uses the docker-container driver).
+    command: "docker build --load --tag git-restore-mtime:${BUILDKITE_TAG:-latest} ."
+    plugins:
+      # Fetch the registry token and expose it as CONTAINER_PACKAGE_REGISTRY_TOKEN
+      # (a name docker-image-push dereferences). The Buildkite secret is named
+      # GIT_RESTORE_MTIME_PUBLISH_PACKAGES_TOKEN.
+      - secrets#v2.4.0:
+          variables:
+            CONTAINER_PACKAGE_REGISTRY_TOKEN: GIT_RESTORE_MTIME_PUBLISH_PACKAGES_TOKEN
+      - docker-image-push#v1.3.0:
+          provider: buildkite
+          image: git-restore-mtime
+          tag: "${BUILDKITE_TAG:-latest}"
+          buildkite:
+            org-slug: jessexoc
+            registry-slug: buildkite-git-restore-mtime-plugin
+            auth-method: api-token
+            # `$$` escapes Buildkite's upload interpolation so the plugin receives
+            # the literal `$CONTAINER_PACKAGE_REGISTRY_TOKEN` and dereferences the
+            # env var (populated by the secrets plugin) at runtime.
+            api-token: "$$CONTAINER_PACKAGE_REGISTRY_TOKEN"

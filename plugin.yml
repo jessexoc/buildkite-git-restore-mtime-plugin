@@ -1,0 +1,60 @@
+name: Git Restore Mtime
+description: Restores the modification time of checked out files to the date of the last commit that touched them, using git-restore-mtime.
+author: https://github.com/buildkite-plugins
+requirements:
+  - bash
+  # Plus either `docker` (for the `docker` tool-location) or a `git-restore-mtime`
+  # executable reachable via the `path` tool-location.
+configuration:
+  properties:
+    paths:
+      type: array
+      description: "One or more pathspecs to limit which files have their mtime restored. Restores the whole work tree when omitted."
+      items:
+        type: string
+    commit-time:
+      type: boolean
+      description: "Use the commit time instead of the author time (git-restore-mtime --commit-time)."
+      default: false
+    first-parent:
+      type: boolean
+      description: "Only consider the first parent when evaluating merge commits (git-restore-mtime --first-parent)."
+      default: false
+    skip-missing:
+      type: boolean
+      description: "Do not retry finding files in merge commits (git-restore-mtime --skip-missing)."
+      default: false
+    merge:
+      type: boolean
+      description: "Include merge commits when evaluating file timestamps (git-restore-mtime --merge)."
+      default: false
+    no-directories:
+      type: boolean
+      description: "Do not update the mtime of directories (git-restore-mtime --no-directories)."
+      default: false
+    force:
+      type: boolean
+      description: "Update files even if they have uncommitted modifications (git-restore-mtime --force)."
+      default: false
+    skip-older-than:
+      type: number
+      description: "Ignore files whose current mtime is already older than this many seconds (git-restore-mtime --skip-older-than)."
+      minimum: 0
+    dry-run:
+      type: boolean
+      description: "Report what would change without modifying any timestamps (git-restore-mtime --test)."
+      default: false
+    verbose:
+      type: boolean
+      description: "Print additional information per file (git-restore-mtime --verbose)."
+      default: false
+    quiet:
+      type: boolean
+      description: "Suppress informative messages and the summary (git-restore-mtime --quiet)."
+      default: false
+    tool-location:
+      type: string
+      description: "Where to find git-restore-mtime. One of: `docker` (default, runs the ghcr.io/jessexoc/git-restore-mtime image), `docker:<image>` (a custom image), `path` (find git-restore-mtime on PATH), or `path:<file>` (explicit path to the executable)."
+      default: "docker"
+      pattern: "^(docker|docker:.+|path|path:.+)$"
+  additionalProperties: false
