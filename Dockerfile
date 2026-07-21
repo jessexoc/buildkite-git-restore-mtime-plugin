@@ -24,5 +24,7 @@ RUN git config --system --add safe.directory '*'
 # Repositories are expected to be mounted here.
 WORKDIR /workdir
 
+# With no arguments git-restore-mtime restores the whole work tree mounted at
+# WORKDIR, so `docker run <image>` (no args) operates on the current directory.
 ENTRYPOINT ["git-restore-mtime"]
-CMD ["--help"]
+CMD []
