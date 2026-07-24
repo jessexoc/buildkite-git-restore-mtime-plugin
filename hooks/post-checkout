@@ -16,6 +16,61 @@ result=()
 # Default Docker image used by the `docker` tool-location.
 DEFAULT_DOCKER_IMAGE="ghcr.io/jessexoc/git-restore-mtime"
 
+# Echoes each external alternate object directory the checkout depends on, one
+# absolute path per line.
+#
+# When Buildkite's git-mirror feature is enabled the checkout is created with
+# `git clone --reference <mirror>` (without --dissociate), which leaves an
+# alternates file pointing the work tree's object store at the shared mirror,
+# e.g. /var/lib/buildkite-agent/git-mirrors/<repo>-git/objects. The actual
+# commit/tree/blob objects live only in that mirror. A container that mounts
+# only the work tree therefore can't resolve them, which git reports as
+# "unable to normalize alternate object path" followed by "fatal: bad object
+# HEAD". Callers mount each returned directory into the container at the same
+# path so git resolves objects exactly as it does on the host.
+#
+# Relies on the global CHECKOUT_PATH. Alternates are followed transitively in
+# case a referenced mirror is itself a reference clone.
+resolve_alternate_object_dirs() {
+  local objects_dir=""
+  # Prefer git to locate the object store (it handles worktrees and `.git`
+  # gitfiles correctly); fall back to the conventional path so the docker
+  # tool-location keeps working on the rare agent without git on PATH.
+  if command_exists git; then
+    objects_dir=$(git -C "${CHECKOUT_PATH}" rev-parse --git-path objects 2>/dev/null || true)
+    # rev-parse may return a path relative to CHECKOUT_PATH.
+    if [[ -n "${objects_dir}" && "${objects_dir}" != /* ]]; then
+      objects_dir="${CHECKOUT_PATH}/${objects_dir}"
+    fi
+  fi
+  objects_dir="${objects_dir:-${CHECKOUT_PATH}/.git/objects}"
+
+  local -a queue=("${objects_dir}")
+  local -A seen=()
+  while [[ ${#queue[@]} -gt 0 ]]; do
+    local dir="${queue[0]}"
+    queue=("${queue[@]:1}")
+
+    local alt_file="${dir}/info/alternates"
+    [[ -f "${alt_file}" ]] || continue
+
+    local line
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      # git treats blank lines and '#'-prefixed lines in alternates as comments.
+      [[ -z "${line}" || "${line}" == \#* ]] && continue
+      # A relative alternate is resolved against the object dir holding the file.
+      local alt="${line}"
+      [[ "${alt}" != /* ]] && alt="${dir}/${alt}"
+      [[ -d "${alt}" ]] || continue
+      if [[ -z "${seen[${alt}]:-}" ]]; then
+        seen[${alt}]=1
+        printf '%s\n' "${alt}"
+        queue+=("${alt}")
+      fi
+    done < "${alt_file}"
+  done
+}
+
 # Populates the global GRM_CMD array with the command used to invoke
 # git-restore-mtime, based on the `tool-location` option:
 #   docker         -> run the default image, mounting the checkout at /workdir
@@ -40,7 +95,17 @@ resolve_git_restore_mtime() {
       fi
       # Mount the checkout at /workdir and run there so pathspecs resolve
       # relative to the repository root regardless of the image's WORKDIR.
-      GRM_CMD=(docker run --rm -v "${CHECKOUT_PATH}:/workdir" -w /workdir "${image}")
+      local -a mounts=(-v "${CHECKOUT_PATH}:/workdir")
+      # Also mount any external alternate object stores (e.g. a Buildkite git
+      # mirror) at their original host path, so git inside the container can
+      # resolve objects that live outside the work tree.
+      local alt_dir
+      while IFS= read -r alt_dir; do
+        [[ -n "${alt_dir}" ]] || continue
+        mounts+=(-v "${alt_dir}:${alt_dir}:ro")
+        log_info "Mounting alternate object store (git mirror): ${alt_dir}"
+      done < <(resolve_alternate_object_dirs)
+      GRM_CMD=(docker run --rm "${mounts[@]}" -w /workdir "${image}")
       log_info "Using git-restore-mtime from Docker image: ${image}"
       ;;
     path)

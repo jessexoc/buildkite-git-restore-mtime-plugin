@@ -43,6 +43,35 @@ SH
   assert_output --partial 'File modification times restored'
 }
 
+@test "Mounts a git-mirror alternate object store into the docker container" {
+  # Simulate a Buildkite git-mirror checkout: an alternates file pointing the
+  # work tree's object store at an external mirror outside the work tree.
+  local mirror="${BATS_TEST_TMPDIR}/git-mirrors/example-git/objects"
+  mkdir -p "${mirror}"
+  mkdir -p "${TEST_REPO}/.git/objects/info"
+  echo "${mirror}" > "${TEST_REPO}/.git/objects/info/alternates"
+
+  make_fake docker
+  export PATH="${FAKE_BIN}:${PATH}"
+
+  run "$PWD"/hooks/post-checkout
+
+  assert_success
+  assert_output --partial "Mounting alternate object store (git mirror): ${mirror}"
+  assert_output --partial "-v ${TEST_REPO}:/workdir -v ${mirror}:${mirror}:ro -w /workdir"
+}
+
+@test "Adds no alternate mounts when the checkout has no git mirror" {
+  make_fake docker
+  export PATH="${FAKE_BIN}:${PATH}"
+
+  run "$PWD"/hooks/post-checkout
+
+  assert_success
+  refute_output --partial 'Mounting alternate object store'
+  assert_output --partial "FAKE docker args: run --rm -v ${TEST_REPO}:/workdir -w /workdir ghcr.io/jessexoc/git-restore-mtime"
+}
+
 @test "docker:<image> uses a custom image" {
   export BUILDKITE_PLUGIN_GIT_RESTORE_MTIME_TOOL_LOCATION='docker:example.com/mine:1.2.3'
   make_fake docker
