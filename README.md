@@ -24,7 +24,7 @@ steps:
   - label: "🔨 Build"
     command: "make"
     plugins:
-      - git-restore-mtime#v1.0.1: ~
+      - git-restore-mtime#v1.0.2: ~
 ```
 
 Limit the restore to specific paths and use commit time instead of author time:
@@ -34,7 +34,7 @@ steps:
   - label: "🔨 Build docs"
     command: "make -C docs html"
     plugins:
-      - git-restore-mtime#v1.0.1:
+      - git-restore-mtime#v1.0.2:
           paths:
             - "docs"
             - "src"
@@ -52,7 +52,7 @@ steps:
     command: "make"
     plugins:
       # Use git-restore-mtime installed on the agent's PATH instead of Docker.
-      - git-restore-mtime#v1.0.1:
+      - git-restore-mtime#v1.0.2:
           tool-location: "path"
 ```
 
