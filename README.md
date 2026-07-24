@@ -24,7 +24,7 @@ steps:
   - label: "🔨 Build"
     command: "make"
     plugins:
-      - git-restore-mtime#v1.0.0: ~
+      - git-restore-mtime#v1.0.2: ~
 ```
 
 Limit the restore to specific paths and use commit time instead of author time:
@@ -34,7 +34,7 @@ steps:
   - label: "🔨 Build docs"
     command: "make -C docs html"
     plugins:
-      - git-restore-mtime#v1.0.0:
+      - git-restore-mtime#v1.0.2:
           paths:
             - "docs"
             - "src"
@@ -52,7 +52,7 @@ steps:
     command: "make"
     plugins:
       # Use git-restore-mtime installed on the agent's PATH instead of Docker.
-      - git-restore-mtime#v1.0.0:
+      - git-restore-mtime#v1.0.2:
           tool-location: "path"
 ```
 
@@ -135,6 +135,20 @@ bundled [Dockerfile](Dockerfile) does).
 > work as expected. When testing the `docker` tool-location locally on **macOS**,
 > Docker Desktop's virtiofs mounts may not persist `mtime` changes back to the
 > host — use the `path` tool-location for local macOS testing.
+
+## Git mirrors
+
+When Buildkite's [git-mirror](https://buildkite.com/docs/pipelines/best-practices/git-checkout-optimization#git-mirrors)
+optimisation is enabled, the checkout is created with `git clone --reference`,
+so its object store is an [alternate](https://git-scm.com/docs/gitrepository-layout#alternates)
+that lives outside the work tree (e.g. under
+`/var/lib/buildkite-agent/git-mirrors/`). The commit history the plugin needs is
+only in that mirror. For the `docker` locations the plugin detects these
+alternate object directories and bind-mounts each one (read-only) into the
+container at its original host path, so `git` resolves objects exactly as it
+does on the agent. Without this, `git` inside the container reports
+`unable to normalize alternate object path` and `fatal: bad object HEAD`.
+Detection is automatic and a no-op when no mirror is in use.
 
 ## Docker image
 
